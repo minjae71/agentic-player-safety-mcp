@@ -1,0 +1,46 @@
+server:
+  port: ${PORT:8080}
+  shutdown: graceful
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+
+spring:
+  application:
+    name: agentic-player-safety-mcp
+  ai:
+    mcp:
+      server:
+        name: agentic-player-safety-mcp
+        version: 0.1.0
+        instructions: >
+          해외직구 및 소비자제품의 공식 리콜 정보를 확인하는 도구입니다.
+          제품 동일성은 모델 번호, 제조번호, 사진과 공식 설명을 함께 대조해야 하며,
+          검색 결과가 없다는 이유만으로 안전하다고 단정하지 마세요.
+        type: SYNC
+        protocol: STREAMABLE
+        annotation-scanner:
+          enabled: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+safety:
+  cpsc:
+    base-url: ${CPSC_BASE_URL:https://www.saferproducts.gov}
+    read-timeout-millis: ${CPSC_READ_TIMEOUT_MILLIS:8000}
+    max-results: ${CPSC_MAX_RESULTS:10}
+
+logging:
+  level:
+    root: INFO
+    com.agenticplayer.safety: INFO
