@@ -37,7 +37,8 @@ Windows:
 |---|---:|---|
 | `PORT` | `8080` | 서버 포트 |
 | `CPSC_BASE_URL` | `https://www.saferproducts.gov` | CPSC API 기준 URL |
-| `CPSC_READ_TIMEOUT_MILLIS` | `8000` | 외부 API 읽기 제한시간 |
+| `CPSC_CONNECT_TIMEOUT_MILLIS` | `800` | 외부 API 연결 제한시간 |
+| `CPSC_READ_TIMEOUT_MILLIS` | `2500` | 외부 API 읽기 제한시간 |
 | `CPSC_MAX_RESULTS` | `10` | 한 번에 반환할 최대 결과 수 |
 
 API 키와 사용자 데이터는 필요하지 않습니다.

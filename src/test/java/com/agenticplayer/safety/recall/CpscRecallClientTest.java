@@ -44,7 +44,7 @@ class CpscRecallClientTest {
                           "RemedyOptions": [{"Option": "Refund"}]
                         }]
                         """));
-        var properties = new CpscProperties(server.url("/").toString(), 1_000, 10);
+        var properties = new CpscProperties(server.url("/").toString(), 500, 1_000, 10);
         var client = new CpscRecallClient(
                 RestClient.builder().requestFactory(new JdkClientHttpRequestFactory()).baseUrl(properties.baseUrl()).build(),
                 properties);

@@ -21,6 +21,7 @@ spring:
           검색 결과가 없다는 이유만으로 안전하다고 단정하지 마세요.
         type: SYNC
         protocol: STREAMABLE
+        tool-callback-converter: false
         annotation-scanner:
           enabled: false
 
@@ -37,7 +38,8 @@ management:
 safety:
   cpsc:
     base-url: ${CPSC_BASE_URL:https://www.saferproducts.gov}
-    read-timeout-millis: ${CPSC_READ_TIMEOUT_MILLIS:8000}
+    connect-timeout-millis: ${CPSC_CONNECT_TIMEOUT_MILLIS:800}
+    read-timeout-millis: ${CPSC_READ_TIMEOUT_MILLIS:2500}
     max-results: ${CPSC_MAX_RESULTS:10}
 
 logging:
