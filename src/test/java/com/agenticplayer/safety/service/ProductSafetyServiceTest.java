@@ -36,13 +36,15 @@ class ProductSafetyServiceTest {
     void modelAndBrandIncreaseMatchScore() {
         StubClient client = new StubClient();
         client.respond("mini trampoline", List.of(matchingRecall));
-        ProductSafetyService service = new ProductSafetyService(client);
+        ProductSafetyService service = service(client);
 
         var result = service.search("mini trampoline", "SEGMART", "SOSTT051BR", 5);
 
         assertThat(result.recalls()).hasSize(1);
         assertThat(result.recalls().get(0).matchScore()).isEqualTo(100);
         assertThat(result.recalls().get(0).matchConfidence()).isEqualTo("높음");
+        assertThat(result.verificationStatus()).isEqualTo("CONFIRMED_RECALL_MATCH");
+        assertThat(result.exactModelMatch()).isTrue();
     }
 
     @Test
@@ -50,7 +52,7 @@ class ProductSafetyServiceTest {
         StubClient client = new StubClient();
         client.respond("trampoline", List.of(matchingRecall));
         client.respond("SEGMART", List.of(matchingRecall));
-        ProductSafetyService service = new ProductSafetyService(client);
+        ProductSafetyService service = service(client);
 
         var result = service.search("SEGMART trampoline", "SEGMART", "SOSTT051BR", 5);
 
@@ -65,7 +67,7 @@ class ProductSafetyServiceTest {
     void translatesKnownKoreanProductCategoryForCpscSearch() {
         StubClient client = new StubClient();
         client.respond("미니 trampoline", List.of(matchingRecall));
-        ProductSafetyService service = new ProductSafetyService(client);
+        ProductSafetyService service = service(client);
 
         var result = service.search("SEGMART 미니 트램펄린", "SEGMART", "SOSTT051BR", 5);
 
@@ -77,7 +79,7 @@ class ProductSafetyServiceTest {
     void searchesByBrandWhenOnlyBrandAndModelAreProvided() {
         StubClient client = new StubClient();
         client.respond("SEGMART", List.of(matchingRecall));
-        ProductSafetyService service = new ProductSafetyService(client);
+        ProductSafetyService service = service(client);
 
         var result = service.search("", "SEGMART", "SOSTT051CR", 5);
 
@@ -88,8 +90,26 @@ class ProductSafetyServiceTest {
     }
 
     @Test
+    void doesNotClaimThatUnknownModelHasNoRecall() {
+        StubClient client = new StubClient();
+        client.respond("SEGMART", List.of(matchingRecall));
+        ProductSafetyService service = service(client);
+
+        var result = service.search("", "SEGMART", "TEST-NOT-EXIST", 5);
+
+        assertThat(result.verificationStatus()).isEqualTo("MODEL_NOT_CONFIRMED");
+        assertThat(result.exactModelMatch()).isFalse();
+        assertThat(result.verificationMessage())
+                .contains("정확한 일치를 확인하지 못했습니다")
+                .contains("리콜 대상이 아니거나 안전하다는 뜻이 아닙니다");
+        assertThat(result.recalls()).isNotEmpty();
+        assertThat(result.recalls())
+                .allMatch(summary -> Boolean.FALSE.equals(summary.requestedModelMatched()));
+    }
+
+    @Test
     void checklistDoesNotRequireStoredUserData() {
-        ProductSafetyService service = new ProductSafetyService(new StubClient());
+        ProductSafetyService service = service(new StubClient());
 
         var checklist = service.checklist("전기포트", "Example", "K100", "해외직구");
 
@@ -97,6 +117,10 @@ class ProductSafetyServiceTest {
         assertThat(checklist.nextActions())
                 .contains("이 체크리스트만으로 리콜 대상 여부를 판정하지 마세요.")
                 .noneMatch(item -> item.contains("search_product_recalls"));
+    }
+
+    private ProductSafetyService service(StubClient client) {
+        return new ProductSafetyService(client, Runnable::run);
     }
 
     private static final class StubClient extends CpscRecallClient {

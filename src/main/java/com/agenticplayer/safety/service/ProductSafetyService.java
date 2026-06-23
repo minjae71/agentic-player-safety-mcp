@@ -9,12 +9,15 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.regex.Pattern;
 
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import com.agenticplayer.safety.recall.CpscRecall;
 import com.agenticplayer.safety.recall.CpscRecallClient;
+import com.agenticplayer.safety.recall.RecallSourceUnavailableException;
 import com.agenticplayer.safety.tool.ProductSafetyResponse;
 
 @Service
@@ -23,27 +26,36 @@ public class ProductSafetyService {
     private static final Pattern NON_ALPHANUMERIC = Pattern.compile("[^a-z0-9]");
 
     private final CpscRecallClient recallClient;
+    private final Executor recallSearchExecutor;
 
-    public ProductSafetyService(CpscRecallClient recallClient) {
+    public ProductSafetyService(
+            CpscRecallClient recallClient,
+            @Qualifier("recallSearchExecutor") Executor recallSearchExecutor) {
         this.recallClient = recallClient;
+        this.recallSearchExecutor = recallSearchExecutor;
     }
 
     public ProductSafetyResponse.SearchResult search(String productName, String brand, String model, int limit) {
         firstNotBlank(productName, brand, model);
         List<String> searchedQueries = buildSearchQueries(productName, brand, model);
-        List<CpscRecall> recalls = searchAndMerge(searchedQueries, limit);
+        SearchAggregation aggregation = searchAndMerge(searchedQueries, limit);
 
-        List<ProductSafetyResponse.RecallSummary> matches = recalls.stream()
+        List<ProductSafetyResponse.RecallSummary> matches = aggregation.recalls().stream()
                 .map(recall -> toSummary(recall, productName, brand, model))
                 .sorted((left, right) -> Integer.compare(right.matchScore(), left.matchScore()))
                 .limit(normalizeLimit(limit))
                 .toList();
+        Verification verification = determineVerification(model, matches);
 
         return new ProductSafetyResponse.SearchResult(
                 productName,
                 brand,
                 model,
                 searchedQueries,
+                aggregation.failedQueries(),
+                verification.status(),
+                verification.exactModelMatch(),
+                verification.message(),
                 "미국 소비자제품안전위원회(CPSC) 공식 리콜 API",
                 "미국에서 발표된 소비자제품 리콜만 조회합니다. 검색 결과가 없더라도 안전이 보장되는 것은 아닙니다.",
                 matches);
@@ -96,6 +108,7 @@ public class ProductSafetyService {
                 firstName(recall.hazards()),
                 firstName(recall.remedies()),
                 recall.url(),
+                !hasText(model) ? null : recallContains(recall, model),
                 score,
                 confidence);
     }
@@ -118,11 +131,7 @@ public class ProductSafetyService {
     }
 
     private int calculateMatchScore(CpscRecall recall, String productName, String brand, String model) {
-        String haystack = normalize(String.join(" ",
-                valueOrEmpty(recall.title()),
-                valueOrEmpty(recall.description()),
-                recall.products().stream().map(CpscRecall.NamedValue::name).filter(this::hasText).reduce("", (a, b) -> a + " " + b),
-                recall.productUpcs().stream().map(CpscRecall.ProductUpc::upc).filter(this::hasText).reduce("", (a, b) -> a + " " + b)));
+        String haystack = normalizedRecallText(recall);
 
         int score = 0;
         score += contains(haystack, model) ? 55 : 0;
@@ -131,18 +140,63 @@ public class ProductSafetyService {
         return Math.min(score, 100);
     }
 
-    private List<CpscRecall> searchAndMerge(List<String> queries, int requestedLimit) {
+    private SearchAggregation searchAndMerge(List<String> queries, int requestedLimit) {
         int perQueryLimit = Math.max(normalizeLimit(requestedLimit), 5);
-        List<CompletableFuture<List<CpscRecall>>> searches = queries.stream()
-                .map(query -> CompletableFuture.supplyAsync(() -> recallClient.search(query, perQueryLimit)))
+        List<CompletableFuture<QuerySearchResult>> searches = queries.stream()
+                .map(query -> CompletableFuture
+                        .supplyAsync(() -> recallClient.search(query, perQueryLimit), recallSearchExecutor)
+                        .handle((recalls, error) -> new QuerySearchResult(
+                                query,
+                                error == null ? recalls : List.of(),
+                                error != null)))
                 .toList();
 
         Map<String, CpscRecall> uniqueRecalls = new LinkedHashMap<>();
-        searches.stream()
-                .map(CompletableFuture::join)
-                .flatMap(List::stream)
+        List<QuerySearchResult> results = searches.stream().map(CompletableFuture::join).toList();
+        results.stream()
+                .flatMap(result -> result.recalls().stream())
                 .forEach(recall -> uniqueRecalls.putIfAbsent(recallKey(recall), recall));
-        return new ArrayList<>(uniqueRecalls.values());
+        List<String> failedQueries = results.stream()
+                .filter(QuerySearchResult::failed)
+                .map(QuerySearchResult::query)
+                .toList();
+        if (failedQueries.size() == queries.size()) {
+            throw new RecallSourceUnavailableException(
+                    "CPSC 리콜 검색 요청이 모두 실패했습니다. 잠시 후 다시 시도해 주세요.",
+                    new IllegalStateException("Failed queries: " + failedQueries));
+        }
+        return new SearchAggregation(new ArrayList<>(uniqueRecalls.values()), failedQueries);
+    }
+
+    private Verification determineVerification(
+            String model,
+            List<ProductSafetyResponse.RecallSummary> recalls) {
+        if (hasText(model)) {
+            boolean exactModelMatch = recalls.stream()
+                    .anyMatch(summary -> Boolean.TRUE.equals(summary.requestedModelMatched()));
+            if (exactModelMatch) {
+                return new Verification(
+                        "CONFIRMED_RECALL_MATCH",
+                        true,
+                        "요청한 모델 번호가 공식 리콜 공고 내용에서 확인되었습니다.");
+            }
+            return new Verification(
+                    "MODEL_NOT_CONFIRMED",
+                    false,
+                    "조회한 CPSC 기록에서는 요청 모델 번호의 정확한 일치를 확인하지 못했습니다. "
+                            + "이는 리콜 대상이 아니거나 안전하다는 뜻이 아닙니다. "
+                            + "모델 표기, 제조번호, 생산일자와 제조사 또는 CPSC의 최신 공고를 추가로 확인하세요.");
+        }
+        if (recalls.isEmpty()) {
+            return new Verification(
+                    "NO_CANDIDATES_FOUND",
+                    false,
+                    "입력 조건으로 리콜 후보를 찾지 못했지만 제품의 안전 또는 비리콜을 보장하지 않습니다.");
+        }
+        return new Verification(
+                "CANDIDATES_FOUND",
+                false,
+                "제품명 또는 브랜드와 관련된 리콜 후보입니다. 정확한 모델 번호와 상세 공고를 대조하세요.");
     }
 
     private List<String> buildSearchQueries(String productName, String brand, String model) {
@@ -209,6 +263,24 @@ public class ProductSafetyService {
         return "fallback:" + valueOrEmpty(recall.url()) + ":" + valueOrEmpty(recall.title());
     }
 
+    private boolean recallContains(CpscRecall recall, String value) {
+        return contains(normalizedRecallText(recall), value);
+    }
+
+    private String normalizedRecallText(CpscRecall recall) {
+        return normalize(String.join(" ",
+                valueOrEmpty(recall.title()),
+                valueOrEmpty(recall.description()),
+                recall.products().stream()
+                        .map(CpscRecall.NamedValue::name)
+                        .filter(this::hasText)
+                        .reduce("", (left, right) -> left + " " + right),
+                recall.productUpcs().stream()
+                        .map(CpscRecall.ProductUpc::upc)
+                        .filter(this::hasText)
+                        .reduce("", (left, right) -> left + " " + right)));
+    }
+
     private boolean containsProductKeyword(
             String normalizedHaystack,
             String productName,
@@ -262,6 +334,15 @@ public class ProductSafetyService {
 
     private boolean hasText(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private record QuerySearchResult(String query, List<CpscRecall> recalls, boolean failed) {
+    }
+
+    private record SearchAggregation(List<CpscRecall> recalls, List<String> failedQueries) {
+    }
+
+    private record Verification(String status, boolean exactModelMatch, String message) {
     }
 
 }

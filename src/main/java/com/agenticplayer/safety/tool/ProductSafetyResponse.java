@@ -13,6 +13,10 @@ public final class ProductSafetyResponse {
             String requestedBrand,
             String requestedModel,
             List<String> searchedQueries,
+            List<String> failedQueries,
+            String verificationStatus,
+            boolean exactModelMatch,
+            String verificationMessage,
             String source,
             String limitation,
             List<RecallSummary> recalls) {
@@ -26,6 +30,7 @@ public final class ProductSafetyResponse {
             String hazard,
             String remedy,
             String officialUrl,
+            Boolean requestedModelMatched,
             int matchScore,
             String matchConfidence) {
     }
