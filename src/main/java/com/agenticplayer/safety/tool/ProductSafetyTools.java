@@ -19,11 +19,12 @@ public class ProductSafetyTools {
             name = "search_product_recalls",
             description = """
                     SafetyCheck(안심구매) searches official U.S. CPSC consumer-product recalls by product name,
-                    brand, or model number. Use it to identify possible fire, electric-shock, choking, fall,
-                    and other hazards before buying or using imported and secondhand products.
+                    brand, or model number. ALWAYS use this tool first when the user asks whether a product or
+                    model is recalled, even when only a brand and model number are provided. After finding a
+                    candidate, use get_recall_details to verify whether the exact model appears in the notice.
                     """)
     public ProductSafetyResponse.SearchResult searchProductRecalls(
-            @ToolParam(description = "확인할 제품명. 예: toddler trampoline", required = true)
+            @ToolParam(description = "제품명 또는 제품 종류. 모르면 빈 문자열", required = false)
             String productName,
             @ToolParam(description = "브랜드명. 모르면 빈 문자열", required = false)
             String brand,
@@ -56,7 +57,8 @@ public class ProductSafetyTools {
             description = """
                     SafetyCheck(안심구매) creates a compact checklist for comparing a physical product with
                     an official recall notice. It covers model and lot labels, immediate stop-use rules,
-                    evidence to retain, and recommended next actions for imported or secondhand products.
+                    evidence to retain, and recommended next actions. Do NOT use this tool to determine whether
+                    a product is recalled. For recall-status questions, call search_product_recalls first.
                     """)
     public ProductSafetyResponse.SafetyChecklist createProductSafetyChecklist(
             @ToolParam(description = "확인할 제품명", required = true)

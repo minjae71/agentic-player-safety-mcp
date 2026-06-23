@@ -58,7 +58,6 @@ public class ProductSafetyService {
             String brand,
             String model,
             String purchaseChannel) {
-        SearchIdentity identity = new SearchIdentity(productName, brand, model);
         List<String> labelChecks = List.of(
                 "제품 본체·포장·설명서에서 브랜드와 정확한 모델 번호를 확인하세요.",
                 "제조번호, 로트번호, 생산일자, UPC가 있다면 함께 기록하세요.",
@@ -68,8 +67,8 @@ public class ProductSafetyService {
                 "화재·질식·감전·추락 위험이 언급된 경우 확인 전까지 어린이와 분리 보관하세요.",
                 "임의 수리나 폐기 전에 공식 환불·교환 절차와 증빙 요구사항을 확인하세요.");
         List<String> nextActions = List.of(
-                "search_product_recalls 도구로 '" + identity.bestQuery() + "'를 검색하세요.",
-                "후보가 나오면 get_recall_details로 모델 범위와 공식 조치 방법을 확인하세요.",
+                "이 체크리스트만으로 리콜 대상 여부를 판정하지 마세요.",
+                "리콜 여부는 공식 검색 결과와 상세 공고의 모델 범위를 확인하세요.",
                 "구매처가 " + valueOrUnknown(purchaseChannel) + "인 경우 주문내역과 판매자 정보를 보관하세요.");
 
         return new ProductSafetyResponse.SafetyChecklist(
@@ -265,15 +264,4 @@ public class ProductSafetyService {
         return value != null && !value.isBlank();
     }
 
-    private record SearchIdentity(String productName, String brand, String model) {
-        private String bestQuery() {
-            if (model != null && !model.isBlank()) {
-                return model;
-            }
-            if (brand != null && !brand.isBlank()) {
-                return brand;
-            }
-            return productName;
-        }
-    }
 }

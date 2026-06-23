@@ -74,13 +74,29 @@ class ProductSafetyServiceTest {
     }
 
     @Test
+    void searchesByBrandWhenOnlyBrandAndModelAreProvided() {
+        StubClient client = new StubClient();
+        client.respond("SEGMART", List.of(matchingRecall));
+        ProductSafetyService service = new ProductSafetyService(client);
+
+        var result = service.search("", "SEGMART", "SOSTT051CR", 5);
+
+        assertThat(client.queries()).containsExactly("SEGMART");
+        assertThat(result.recalls()).hasSize(1);
+        assertThat(result.recalls().get(0).recallId()).isEqualTo(10718L);
+        assertThat(result.recalls().get(0).matchConfidence()).isEqualTo("높음");
+    }
+
+    @Test
     void checklistDoesNotRequireStoredUserData() {
         ProductSafetyService service = new ProductSafetyService(new StubClient());
 
         var checklist = service.checklist("전기포트", "Example", "K100", "해외직구");
 
         assertThat(checklist.labelChecks()).hasSize(3);
-        assertThat(checklist.nextActions()).anyMatch(item -> item.contains("K100"));
+        assertThat(checklist.nextActions())
+                .contains("이 체크리스트만으로 리콜 대상 여부를 판정하지 마세요.")
+                .noneMatch(item -> item.contains("search_product_recalls"));
     }
 
     private static final class StubClient extends CpscRecallClient {
