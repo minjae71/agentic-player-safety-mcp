@@ -1,8 +1,14 @@
 package com.agenticplayer.safety.service;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
 
 import org.springframework.stereotype.Service;
@@ -23,18 +29,21 @@ public class ProductSafetyService {
     }
 
     public ProductSafetyResponse.SearchResult search(String productName, String brand, String model, int limit) {
-        String query = firstNotBlank(productName, brand, model);
-        List<CpscRecall> recalls = recallClient.search(query, limit);
+        firstNotBlank(productName, brand, model);
+        List<String> searchedQueries = buildSearchQueries(productName, brand, model);
+        List<CpscRecall> recalls = searchAndMerge(searchedQueries, limit);
 
         List<ProductSafetyResponse.RecallSummary> matches = recalls.stream()
                 .map(recall -> toSummary(recall, productName, brand, model))
                 .sorted((left, right) -> Integer.compare(right.matchScore(), left.matchScore()))
+                .limit(normalizeLimit(limit))
                 .toList();
 
         return new ProductSafetyResponse.SearchResult(
                 productName,
                 brand,
                 model,
+                searchedQueries,
                 "미국 소비자제품안전위원회(CPSC) 공식 리콜 API",
                 "미국에서 발표된 소비자제품 리콜만 조회합니다. 검색 결과가 없더라도 안전이 보장되는 것은 아닙니다.",
                 matches);
@@ -119,8 +128,108 @@ public class ProductSafetyService {
         int score = 0;
         score += contains(haystack, model) ? 55 : 0;
         score += contains(haystack, brand) ? 25 : 0;
-        score += contains(haystack, productName) ? 20 : 0;
+        score += containsProductKeyword(haystack, productName, brand, model) ? 20 : 0;
         return Math.min(score, 100);
+    }
+
+    private List<CpscRecall> searchAndMerge(List<String> queries, int requestedLimit) {
+        int perQueryLimit = Math.max(normalizeLimit(requestedLimit), 5);
+        List<CompletableFuture<List<CpscRecall>>> searches = queries.stream()
+                .map(query -> CompletableFuture.supplyAsync(() -> recallClient.search(query, perQueryLimit)))
+                .toList();
+
+        Map<String, CpscRecall> uniqueRecalls = new LinkedHashMap<>();
+        searches.stream()
+                .map(CompletableFuture::join)
+                .flatMap(List::stream)
+                .forEach(recall -> uniqueRecalls.putIfAbsent(recallKey(recall), recall));
+        return new ArrayList<>(uniqueRecalls.values());
+    }
+
+    private List<String> buildSearchQueries(String productName, String brand, String model) {
+        Set<String> queries = new LinkedHashSet<>();
+        String categoryQuery = removeIdentityTerms(productName, brand, model);
+
+        addQuery(queries, translateKnownKoreanCategory(categoryQuery));
+        addQuery(queries, categoryQuery);
+        addQuery(queries, productName);
+        addQuery(queries, brand);
+
+        if (queries.isEmpty()) {
+            addQuery(queries, model);
+        }
+        return List.copyOf(queries);
+    }
+
+    private String removeIdentityTerms(String productName, String brand, String model) {
+        if (!hasText(productName)) {
+            return "";
+        }
+        String result = productName;
+        if (hasText(brand)) {
+            result = result.replaceAll("(?i)" + Pattern.quote(brand), " ");
+        }
+        if (hasText(model)) {
+            result = result.replaceAll("(?i)" + Pattern.quote(model), " ");
+        }
+        return result.replaceAll("[^\\p{L}\\p{N}\\s-]", " ").replaceAll("\\s+", " ").trim();
+    }
+
+    private String translateKnownKoreanCategory(String value) {
+        if (!hasText(value)) {
+            return "";
+        }
+        String translated = value;
+        Map<String, String> aliases = Map.of(
+                "트램펄린", "trampoline",
+                "전기포트", "electric kettle",
+                "헬멧", "helmet",
+                "유모차", "stroller",
+                "서랍장", "dresser");
+        for (Map.Entry<String, String> alias : aliases.entrySet()) {
+            translated = translated.replace(alias.getKey(), alias.getValue());
+        }
+        return translated.replaceAll("\\s+", " ").trim();
+    }
+
+    private void addQuery(Set<String> queries, String query) {
+        if (!hasText(query)) {
+            return;
+        }
+        String trimmed = query.trim();
+        boolean duplicate = queries.stream().anyMatch(existing -> existing.equalsIgnoreCase(trimmed));
+        if (!duplicate) {
+            queries.add(trimmed);
+        }
+    }
+
+    private String recallKey(CpscRecall recall) {
+        if (recall.recallId() != null) {
+            return "id:" + recall.recallId();
+        }
+        return "fallback:" + valueOrEmpty(recall.url()) + ":" + valueOrEmpty(recall.title());
+    }
+
+    private boolean containsProductKeyword(
+            String normalizedHaystack,
+            String productName,
+            String brand,
+            String model) {
+        if (!hasText(productName)) {
+            return false;
+        }
+        String category = removeIdentityTerms(productName, brand, model);
+        String translated = translateKnownKoreanCategory(category);
+        return Pattern.compile("[\\p{L}\\p{N}-]+")
+                .matcher(translated)
+                .results()
+                .map(match -> match.group())
+                .filter(token -> token.length() >= 3)
+                .anyMatch(token -> contains(normalizedHaystack, token));
+    }
+
+    private int normalizeLimit(int requestedLimit) {
+        return requestedLimit <= 0 ? 5 : Math.min(requestedLimit, 10);
     }
 
     private boolean contains(String normalizedHaystack, String needle) {

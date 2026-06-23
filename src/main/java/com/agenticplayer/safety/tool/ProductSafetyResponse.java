@@ -12,6 +12,7 @@ public final class ProductSafetyResponse {
             String requestedProductName,
             String requestedBrand,
             String requestedModel,
+            List<String> searchedQueries,
             String source,
             String limitation,
             List<RecallSummary> recalls) {
